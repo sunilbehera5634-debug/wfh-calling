@@ -131,9 +131,7 @@ export default function App() {
           if (!localStorage.getItem(purchaseTrackedKey)) {
             triggerPixelEvent('Purchase', {
               value: 199,
-              currency: 'INR',
-              content_name: 'WFH Hindi Calling Masterclass Seat Confirmation',
-              registration_id: found.id
+              currency: 'INR'
             });
             localStorage.setItem(purchaseTrackedKey, 'true');
           }
@@ -212,12 +210,7 @@ export default function App() {
     }
 
     // Fire Meta Pixel Lead event ONLY on successful registration form submission
-    triggerPixelEvent('Lead', {
-      content_name: 'Webinar Registration Submission',
-      value: 199,
-      currency: 'INR',
-      registration_id: generatedId
-    });
+    triggerPixelEvent('Lead');
 
     setIsSubmitting(false);
     const updated = [newReg, ...allRegistrations];
