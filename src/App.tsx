@@ -262,6 +262,24 @@ export default function App() {
       if (r.id === id) {
         const updatedReg = { ...r, status: newStatus };
         if (newStatus === 'APPROVED') {
+          // Trigger Meta Conversions API (Server-Side) Purchase Event ONLY on Admin Approval
+          try {
+            fetch('/api/meta-purchase', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                registrationId: r.id,
+                name: r.name,
+                phone: r.phone,
+                email: r.email,
+                value: 199,
+                currency: 'INR'
+              })
+            });
+          } catch (e) {
+            console.error('Meta CAPI Purchase error:', e);
+          }
+
           const waNumber = r.phone.replace(/\D/g, '');
           const groupLink = 'https://chat.whatsapp.com/EFkfWTf63LJ2UtpmQF37fn?s=cl&p=a&mlu=4&ilr=4&iam=2';
           const message = encodeURIComponent(
