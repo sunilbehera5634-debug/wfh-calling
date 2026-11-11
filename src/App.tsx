@@ -19,8 +19,22 @@ interface Registration {
 
 // Helper to safely trigger Meta Pixel events
 const triggerPixelEvent = (eventName: string, params?: Record<string, any>) => {
-  if (typeof window !== 'undefined' && typeof (window as any).fbq === 'function') {
-    (window as any).fbq('track', eventName, params);
+  if (typeof window !== 'undefined') {
+    const fbq = (window as any).fbq;
+    if (typeof fbq === 'function') {
+      try {
+        if (params) {
+          fbq('track', eventName, params);
+        } else {
+          fbq('track', eventName);
+        }
+        console.log(`[Meta Pixel Event Fired]: ${eventName}`, params || '');
+      } catch (err) {
+        console.error(`[Meta Pixel Error on ${eventName}]:`, err);
+      }
+    } else {
+      console.warn(`[Meta Pixel Warning]: fbq is not available on window for event "${eventName}"`);
+    }
   }
 };
 
@@ -57,6 +71,11 @@ export default function App() {
 
   const openRegistrationModal = () => {
     setIsModalOpen(true);
+    triggerPixelEvent('AddToCart', {
+      value: 199,
+      currency: 'INR',
+      content_name: 'WFH Hindi Calling Masterclass'
+    });
     triggerPixelEvent('InitiateCheckout', {
       value: 199,
       currency: 'INR',
