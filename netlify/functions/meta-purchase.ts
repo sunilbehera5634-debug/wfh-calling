@@ -13,7 +13,7 @@ export async function handler(event: any) {
 
   try {
     const body = JSON.parse(event.body || '{}');
-    const { registrationId, name, phone, email, value = 199, currency = 'INR' } = body;
+    const { registrationId, name, phone, email, value = 0, currency = 'INR' } = body;
 
     if (!registrationId) {
       return {

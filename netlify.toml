@@ -4,6 +4,12 @@
   functions = "netlify/functions"
 
 [[redirects]]
+  from = "/api/meta-lead"
+  to = "/.netlify/functions/meta-lead"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/meta-purchase"
   to = "/.netlify/functions/meta-purchase"
   status = 200

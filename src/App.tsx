@@ -17,18 +17,20 @@ interface Registration {
   date: string;
 }
 
-// Helper to safely trigger Meta Pixel events
-const triggerPixelEvent = (eventName: string, params?: Record<string, any>) => {
+// Helper to safely trigger Meta Pixel events with optional eventID deduplication
+const triggerPixelEvent = (eventName: string, params?: Record<string, any>, eventId?: string) => {
   if (typeof window !== 'undefined') {
     const fbq = (window as any).fbq;
     if (typeof fbq === 'function') {
       try {
-        if (params) {
+        if (eventId) {
+          fbq('track', eventName, params || {}, { eventID: eventId });
+        } else if (params) {
           fbq('track', eventName, params);
         } else {
           fbq('track', eventName);
         }
-        console.log(`[Meta Pixel Event Fired]: ${eventName}`, params || '');
+        console.log(`[Meta Pixel Event Fired]: ${eventName}`, params || '', eventId ? `(eventID: ${eventId})` : '');
       } catch (err) {
         console.error(`[Meta Pixel Error on ${eventName}]:`, err);
       }
@@ -72,24 +74,27 @@ export default function App() {
   const openRegistrationModal = () => {
     setIsModalOpen(true);
     triggerPixelEvent('AddToCart', {
-      value: 199,
+      value: 0,
       currency: 'INR',
       content_name: 'WFH Hindi Calling Masterclass'
     });
     triggerPixelEvent('InitiateCheckout', {
-      value: 199,
+      value: 0,
       currency: 'INR',
       content_name: 'WFH Hindi Calling Masterclass Seat Booking'
     });
   };
 
   useEffect(() => {
-    // Fire Meta Pixel ViewContent event on page load
-    triggerPixelEvent('ViewContent', {
-      content_name: 'WFH Hindi Calling Masterclass',
-      value: 199,
-      currency: 'INR'
-    });
+    // Fire Meta Pixel ViewContent event once per session on page load (guards against StrictMode double-fire)
+    if (!sessionStorage.getItem('wfh_viewcontent_tracked')) {
+      triggerPixelEvent('ViewContent', {
+        content_name: 'WFH Hindi Calling Masterclass',
+        value: 0,
+        currency: 'INR'
+      });
+      sessionStorage.setItem('wfh_viewcontent_tracked', 'true');
+    }
 
     // Load registrations from localStorage
     const savedRegs = localStorage.getItem('wfh_all_registrations');
@@ -103,7 +108,7 @@ export default function App() {
       // Default dummy registration for initial demo
       const initial: Registration[] = [
         {
-          id: 'WFH-199-482910',
+          id: 'WFH-REG-482910',
           name: 'Amit Kumar',
           phone: '9876543210',
           email: 'amit@example.com',
@@ -149,9 +154,9 @@ export default function App() {
           const purchaseTrackedKey = `wfh_purchase_tracked_${found.id}`;
           if (!localStorage.getItem(purchaseTrackedKey)) {
             triggerPixelEvent('Purchase', {
-              value: 199,
+              value: 0,
               currency: 'INR'
-            });
+            }, `purchase_${found.id}`);
             localStorage.setItem(purchaseTrackedKey, 'true');
           }
         }
@@ -191,9 +196,11 @@ export default function App() {
     }
 
     setIsSubmitting(true);
-    const qrRef = 'QR-PAY-' + Math.floor(100000 + Math.random() * 900000);
-    const generatedId = 'WFH-199-' + Math.floor(100000 + Math.random() * 900000);
+    const qrRef = 'FREE-REG-' + Math.floor(100000 + Math.random() * 900000);
+    const generatedId = 'WFH-REG-' + Math.floor(100000 + Math.random() * 900000);
     const currentDate = new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+    const WHATSAPP_GROUP_LINK = 'https://chat.whatsapp.com/EFkfWTf63LJ2UtpmQF37fn?s=cl&p=a&mlu=4&ilr=4&iam=2';
 
     const newReg: Registration = {
       id: generatedId,
@@ -202,8 +209,8 @@ export default function App() {
       email: formData.email,
       address: formData.address,
       utr: qrRef,
-      screenshot: screenshotFile || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=400&q=80',
-      status: 'PENDING',
+      screenshot: screenshotFile || '',
+      status: 'APPROVED',
       date: currentDate
     };
 
@@ -211,6 +218,7 @@ export default function App() {
       await fetch('/api/proxy-sheets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
         body: JSON.stringify({
           action: 'register',
           registrationId: generatedId,
@@ -219,17 +227,48 @@ export default function App() {
           email: formData.email,
           fullAddress: formData.address,
           paymentScreenshot: newReg.screenshot,
-          paymentStatus: 'PENDING',
+          paymentStatus: 'CONFIRMED',
           registrationDate: currentDate,
-          approvalDate: ''
+          approvalDate: currentDate
         })
       });
     } catch (err) {
       console.error('Google Sheets sync error:', err);
     }
 
-    // Fire Meta Pixel Lead event ONLY on successful registration form submission
-    triggerPixelEvent('Lead');
+    // Fire Meta Pixel Lead & CompleteRegistration events with eventID deduplication
+    const leadTrackedKey = `wfh_lead_tracked_${generatedId}`;
+    if (!localStorage.getItem(leadTrackedKey)) {
+      triggerPixelEvent('Lead', {
+        content_name: 'WFH Hindi Calling Masterclass'
+      }, `lead_${generatedId}`);
+      triggerPixelEvent('CompleteRegistration', {
+        content_name: 'WFH Hindi Calling Masterclass',
+        status: 'confirmed'
+      }, `completeregistration_${generatedId}`);
+      localStorage.setItem(leadTrackedKey, 'true');
+
+      // Send Server-Side Meta Conversions API (CAPI) Lead event with keepalive
+      try {
+        fetch('/api/meta-lead', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          keepalive: true,
+          body: JSON.stringify({
+            registrationId: generatedId,
+            name: formData.name,
+            phone: formData.phone,
+            email: formData.email,
+            eventName: 'Lead'
+          })
+        }).catch(err => console.error('Meta CAPI Lead error:', err));
+      } catch (err) {
+        console.error('Meta CAPI Lead sync error:', err);
+      }
+    }
+
+    // Prevent unintended Purchase firing for free direct-join registrations
+    localStorage.setItem(`wfh_purchase_tracked_${generatedId}`, 'true');
 
     setIsSubmitting(false);
     const updated = [newReg, ...allRegistrations];
@@ -240,7 +279,16 @@ export default function App() {
     setUserRegistration(newReg);
 
     setIsModalOpen(false);
-    setCurrentPage('status');
+    setCurrentPage('dashboard');
+
+    // Directly open WhatsApp group link (allow 450ms for Pixel beacon to flush before top-level redirect)
+    const isInsideIframe = typeof window !== 'undefined' && window.self !== window.top;
+    if (isInsideIframe) {
+      window.open(WHATSAPP_GROUP_LINK, '_blank', 'noopener,noreferrer');
+    } else {
+      await new Promise(resolve => setTimeout(resolve, 450));
+      window.location.href = WHATSAPP_GROUP_LINK;
+    }
   };
 
   const handleAdminLogin = (e: React.FormEvent) => {
@@ -272,7 +320,7 @@ export default function App() {
                 name: r.name,
                 phone: r.phone,
                 email: r.email,
-                value: 199,
+                value: 0,
                 currency: 'INR'
               })
             });
@@ -381,7 +429,7 @@ export default function App() {
                 onClick={openRegistrationModal}
                 className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-sm font-bold rounded-xl shadow-lg shadow-purple-600/30 transition-all transform hover:scale-105 cursor-pointer"
               >
-                Join Webinar @ ₹199 Only
+                Join Webinar Free
               </button>
             )}
 
@@ -417,12 +465,12 @@ export default function App() {
             {userRegistration && (
               <button 
                 onClick={() => { 
-                  setCurrentPage(userRegistration.status === 'APPROVED' ? 'dashboard' : 'status'); 
+                  setCurrentPage('dashboard'); 
                   setMobileMenuOpen(false); 
                 }}
                 className="block w-full text-left py-2 text-emerald-400 font-semibold"
               >
-                Check Registration Status ({userRegistration.status})
+                Join WhatsApp Group & Portal
               </button>
             )}
             <a href="#benefits" onClick={() => setMobileMenuOpen(false)} className="block py-2 text-slate-300">Fayde</a>
@@ -475,14 +523,14 @@ export default function App() {
                       onClick={openRegistrationModal}
                       className="px-8 py-4 bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold text-lg rounded-2xl shadow-xl shadow-purple-900/50 transition-all transform hover:-translate-y-1 flex items-center gap-3 cursor-pointer"
                     >
-                      <span>Join Live Masterclass @ ₹199 Only</span>
+                      <span>Join Live Masterclass Free</span>
                       <ArrowRight className="w-5 h-5" />
                     </button>
                     <div className="text-xs text-slate-400 text-left">
                       <p className="font-semibold text-emerald-400 flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5" /> PhonePe & UPI QR Verified
+                        <CheckCircle2 className="w-3.5 h-3.5" /> 100% Free Registration
                       </p>
-                      <p>✨ Manual Admin Verification & Approval</p>
+                      <p>✨ Direct WhatsApp Group Link Access</p>
                     </div>
                   </div>
 
@@ -530,12 +578,12 @@ export default function App() {
 
                     <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3">
                       <div className="flex items-center justify-between text-sm">
-                        <span className="text-slate-400">Webinar Fee:</span>
+                        <span className="text-slate-400">Regular Webinar Fee:</span>
                         <span className="line-through text-slate-500">₹999</span>
                       </div>
                       <div className="flex items-center justify-between text-base font-bold">
                         <span className="text-purple-300">Special Offer Today:</span>
-                        <span className="text-emerald-400 text-xl font-black">₹199 Only</span>
+                        <span className="text-emerald-400 text-xl font-black">100% FREE</span>
                       </div>
                       <button 
                         onClick={openRegistrationModal}
@@ -547,7 +595,7 @@ export default function App() {
 
                     <div className="flex items-center gap-3 text-xs text-slate-400 justify-center">
                       <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                      <span>100% Secure Manual Payment Verification</span>
+                      <span>Instant Seat Confirmation & Direct WhatsApp Access</span>
                     </div>
                   </div>
                 </div>
@@ -648,7 +696,7 @@ export default function App() {
                 {[
                   { name: "Priya Sharma", role: "Housewife, Delhi", text: "Maine sirf 2 ghante roz kaam karke pehle hi mahine ₹42,000 kamaye. Is webinar ne meri zindagi badal di!", amount: "₹45,000/mo" },
                   { name: "Rahul Verma", role: "College Student, Lucknow", text: "Mujhe English mein problem thi, lekin Hindi calling masterclass join karne ke baad ab main ghar baithe apni padhai ke sath earn kar raha hoon.", amount: "₹38,000/mo" },
-                  { name: "Sunita Mishra", role: "Telecaller, Jaipur", text: "Phonepe se sirf ₹199 dekar yeh webinar join kiya tha. Aaj main ek badi edtech company mein WFH telecaller hoon.", amount: "₹65,000/mo" },
+                  { name: "Sunita Mishra", role: "Telecaller, Jaipur", text: "Maine yeh Live WFH Calling webinar join kiya tha. Aaj main ek badi edtech company mein WFH telecaller hoon.", amount: "₹65,000/mo" },
                   { name: "Vikas Yadav", role: "Job Seeker, Patna", text: "Pehle job nahi mil rahi thi. Webinar ki calling scripts aur pitch strategy apply ki to Fintech company me instant project mil gaya.", amount: "₹52,000/mo" },
                   { name: "Neha Gupta", role: "Freelancer, Indore", text: "Mujhe pehle lagta tha ki online calling work me scam hoga, lekin masterclass ke baad genuine company placements aur direct payouts mil rahe hain!", amount: "₹48,000/mo" },
                   { name: "Deepak Chauhan", role: "Ex-Sales Executive, Bhopal", text: "Office travel me bohot time aur paisa waste hota tha. Ab ghar se Hindi calling karke family ke sath rehte hue double earn kar raha hoon.", amount: "₹72,000/mo" },
@@ -687,8 +735,8 @@ export default function App() {
                 {[
                   { q: "Kya mujhe English aani zaroori hai?", a: "Nahi! Yeh masterclass 100% Hindi calling aur Hindi-speaking customers ke liye hai. English ki koi zaroorat nahi hai." },
                   { q: "Kya iske liye laptop hona zaroori hai?", a: "Bilkul nahi. Aapke paas sirf ek smartphone aur internet connection hona chahiye." },
-                  { q: "₹199 ka charge kyun hai?", a: "Yeh charge sirf un serious logon ke liye hai jo sach mein work from home karke kamana chahte hain aur bheed kam rakhne ke liye hai." },
-                  { q: "Payment aur Seat Confirmation ka kya process hai?", a: "QR code par ₹199 pay karne ke baad UTR number aur payment screenshot upload karein. Admin verification ke baad aapka seat confirm ho jayega aur WhatsApp group link mil jayegi." },
+                  { q: "Kya is webinar ke liye koi fees ya charge hai?", a: "Nahi! Yeh Live Masterclass abhi bilkul FREE hai. Aap bina kisi charge ke apni seat book kar sakte hain." },
+                  { q: "Registration aur Seat Confirmation ka kya process hai?", a: "Registration form mein apni details submit karte hi aapka seat confirm ho jayega aur direct WhatsApp group link open ho jayegi." },
                 ].map((faq, i) => (
                   <div key={i} className="bg-slate-900/70 border border-slate-800 rounded-2xl p-6 space-y-2">
                     <h4 className="text-lg font-bold text-white flex items-center gap-2">
@@ -753,7 +801,7 @@ export default function App() {
                 ) : userRegistration?.status === 'REJECTED' ? (
                   <div className="space-y-4">
                     <div className="p-4 bg-rose-950/40 border border-rose-800/60 rounded-2xl text-rose-200 text-sm">
-                      ❌ Your payment could not be verified. Please contact the administrator or re-submit correct UTR / Screenshot.
+                      ❌ Your registration could not be verified. Please contact the administrator or re-submit your details.
                     </div>
                     <button 
                       onClick={() => {
@@ -763,19 +811,19 @@ export default function App() {
                       }}
                       className="w-full py-4 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
                     >
-                      <span>Re-submit Payment Details</span>
+                      <span>Re-submit Registration Details</span>
                       <RefreshCw className="w-4 h-4" />
                     </button>
                   </div>
                 ) : (
                   <div className="space-y-4">
                     <div className="p-4 bg-amber-950/40 border border-amber-800/60 rounded-2xl text-amber-200 text-sm leading-relaxed">
-                      ⏳ <strong>Your payment is under verification. Your seat is not confirmed yet.</strong><br/>
-                      Admin aapke PhonePe transaction aur screenshot ko verify kar raha hai. Verification mein 15-30 minutes lag sakte hain.
+                      ⏳ <strong>Your registration is under verification. Your seat is not confirmed yet.</strong><br/>
+                      Admin aapki registration details ko verify kar raha hai. Verification mein kuch samay lag sakta hai.
                     </div>
                     <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2 text-xs text-slate-300 font-mono">
                       <p>Registration ID: <span className="text-white font-bold">{userRegistration?.id}</span></p>
-                      <p>UTR / Transaction ID: <span className="text-white font-bold">{userRegistration?.utr}</span></p>
+                      <p>Reference ID: <span className="text-white font-bold">{userRegistration?.utr}</span></p>
                       <p>Submitted On: <span className="text-white">{userRegistration?.date}</span></p>
                     </div>
                     <button 
@@ -812,7 +860,7 @@ export default function App() {
               <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl pointer-events-none"></div>
               <div className="relative z-10 space-y-4">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold">
-                  <CheckCircle2 className="w-4 h-4" /> Seat Confirmed by Admin
+                  <CheckCircle2 className="w-4 h-4" /> Seat Confirmed • Instant Access
                 </div>
                 <h1 className="text-2xl sm:text-4xl font-extrabold text-white">
                   Swagat Hai, {userRegistration?.name || 'VIP Student'}! 🎉
@@ -1022,12 +1070,12 @@ export default function App() {
           <div className="relative bg-slate-900 border border-purple-800/60 rounded-3xl max-w-lg w-full p-4 sm:p-8 shadow-2xl space-y-5 my-auto max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-600 flex items-center justify-center text-white font-bold text-xs">
-                  ₹199
+                <div className="px-2.5 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white font-bold text-xs">
+                  FREE
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Webinar Registration & Payment</h3>
-                  <p className="text-xs text-purple-400">Scan QR Code & Submit Verification Details</p>
+                  <h3 className="text-lg font-bold text-white">Free Webinar Registration</h3>
+                  <p className="text-xs text-purple-400">Details Submit Karein aur Direct WhatsApp Group Join Karein</p>
                 </div>
               </div>
               <button 
@@ -1087,40 +1135,6 @@ export default function App() {
                 />
               </div>
 
-              {/* PhonePe QR Code & Payment Instruction Box */}
-              <div className="bg-slate-950 border border-purple-900/40 rounded-2xl p-4 text-center space-y-3">
-                <div className="flex items-center justify-center gap-2 text-xs font-bold text-purple-300">
-                  <PhoneCall className="w-4 h-4" /> Scan QR Code & Pay ₹199 (Fee)
-                </div>
-                
-                <div className="w-40 h-40 bg-white p-2 rounded-xl mx-auto flex items-center justify-center shadow-lg border border-purple-500/30">
-                  <img 
-                    src="/assets/aistudio/WhatsApp_Image_2026-11-10_at_9.32.59_PM__2__7382ed93.jpeg" 
-                    alt="PhonePe QR Code" 
-                    className="w-full h-full object-contain rounded-lg"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
-                <p className="text-[11px] text-slate-400">PhonePe / GooglePay / Paytm se ₹199 pay karne ke baad niche payment screenshot upload karein.</p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Upload Payment Screenshot (JPG/PNG, max 5MB) *</label>
-                <div className="flex items-center gap-3">
-                  <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl cursor-pointer text-xs font-medium text-slate-300 transition-all">
-                    <Upload className="w-4 h-4 text-purple-400" />
-                    <span>{screenshotName ? screenshotName : 'Choose Screenshot Image...'}</span>
-                    <input 
-                      type="file" 
-                      accept="image/png, image/jpeg, image/jpg"
-                      onChange={handleFileChange}
-                      className="hidden"
-                      required
-                    />
-                  </label>
-                </div>
-              </div>
-
               <div className="space-y-3 pt-2">
                 <button 
                   type="submit"
@@ -1134,7 +1148,7 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <span>Submit Payment for Verification</span>
+                      <span>Join WhatsApp Group Now</span>
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
